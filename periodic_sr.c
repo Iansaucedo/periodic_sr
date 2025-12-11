@@ -12,14 +12,18 @@ static struct timespec initial_time;
 // Structure containing the parameters of each periodic thread
 struct periodic_data
 {
-  struct timespec period;  // period
-  struct timespec wcet1;   // first part of worst-case execution time
-  struct timespec wcet2;   // second part of worst-case execution time
-  struct timespec wcetmut; // worst-case execution time with mutex locked
-  struct timespec phase;   // initial phase to start the thread
-  struct timespec wcrt;    // worst-case response time
-  pthread_mutex_t *mutex;  // pointer to mutex
-  int id;                  // thread identifier
+  struct timespec period;   // period
+  struct timespec wcet1;    // first part of worst-case execution time (before mutexes)
+  struct timespec wcet2;    // middle part of execution time (between mutexes)
+  struct timespec wcet3;    // last part of execution time (after mutexes)
+  struct timespec wcetmut1; // worst-case execution time with mutex1 (R1) locked
+  struct timespec wcetmut2; // worst-case execution time with mutex2 (R2) locked
+  struct timespec phase;    // initial phase to start the thread
+  struct timespec wcrt;     // worst-case response time
+  pthread_mutex_t *mutex1;  // pointer to first mutex (R1)
+  pthread_mutex_t *mutex2;  // pointer to second mutex (R2)
+  int mutex_order;          // order of mutex acquisition: 1=R1->R2, 2=R2->R1
+  int id;                   // thread identifier
 };
 
 typedef enum
@@ -71,18 +75,67 @@ void *periodic(void *arg)
   while (1)
   {
     // periodic work
-    // report ("Start thread ",my_data->id,NULL);
-    eat(&(my_data->wcet1)); // this simulates useful work
-    if (my_data->mutex != NULL)
+    report("Start thread ", my_data->id, NULL);
+    eat(&(my_data->wcet1)); // work before acquiring mutexes
+
+    // Use mutexes in different order depending on mutex_order
+    if (my_data->mutex1 != NULL && my_data->mutex2 != NULL)
     {
-      pthread_mutex_lock(my_data->mutex);
-      eat(&(my_data->wcetmut));
-      pthread_mutex_unlock(my_data->mutex);
+      if (my_data->mutex_order == 1)
+      {
+        // Order: R1 -> R2
+        report("Thread trying to lock R1", my_data->id, NULL);
+        pthread_mutex_lock(my_data->mutex1);
+        report("Thread acquired R1", my_data->id, NULL);
+        eat(&(my_data->wcetmut1));
+        
+        report("Thread trying to lock R2", my_data->id, NULL);
+        pthread_mutex_lock(my_data->mutex2);
+        report("Thread acquired R2", my_data->id, NULL);
+        eat(&(my_data->wcetmut2));
+        
+        pthread_mutex_unlock(my_data->mutex2);
+        report("Thread released R2", my_data->id, NULL);
+        pthread_mutex_unlock(my_data->mutex1);
+        report("Thread released R1", my_data->id, NULL);
+      }
+      else
+      {
+        // Order: R2 -> R1
+        report("Thread trying to lock R2", my_data->id, NULL);
+        pthread_mutex_lock(my_data->mutex2);
+        report("Thread acquired R2", my_data->id, NULL);
+        eat(&(my_data->wcetmut2));
+        
+        report("Thread trying to lock R1", my_data->id, NULL);
+        pthread_mutex_lock(my_data->mutex1);
+        report("Thread acquired R1", my_data->id, NULL);
+        eat(&(my_data->wcetmut1));
+        
+        pthread_mutex_unlock(my_data->mutex1);
+        report("Thread released R1", my_data->id, NULL);
+        pthread_mutex_unlock(my_data->mutex2);
+        report("Thread released R2", my_data->id, NULL);
+      }
+      eat(&(my_data->wcet2)); // work between mutexes release and end
     }
-    eat(&(my_data->wcet2)); // this simulates useful work
+    else if (my_data->mutex1 != NULL)
+    {
+      // Only use mutex1 (for compatibility with threads 2 and 3)
+      pthread_mutex_lock(my_data->mutex1);
+      eat(&(my_data->wcetmut1));
+      pthread_mutex_unlock(my_data->mutex1);
+      eat(&(my_data->wcet2));
+    }
+    else
+    {
+      eat(&(my_data->wcet2)); // no mutexes
+    }
+    
+    eat(&(my_data->wcet3)); // work after mutexes
     clock_gettime(CLOCK_MONOTONIC, &response_time);
     decr_timespec(&response_time, &next_time);
-    // report ("End   thread ",my_data->id,&response_time);
+    report("End   thread ", my_data->id, &response_time);
 
     // set wcrt
     if smaller_timespec (&(my_data->wcrt), &response_time)
@@ -108,72 +161,98 @@ int main()
   pthread_t t1, t2, t3, t4;
   struct sched_param sch_param;
   pthread_attr_t attr;
-  pthread_mutex_t mutex;
-  pthread_mutexattr_t mutexattr;
+  pthread_mutex_t mutex1, mutex2; // R1 and R2
+  pthread_mutexattr_t mutexattr1, mutexattr2;
   struct periodic_data data1, data2, data3, data4;
 
-  const protocol_usage PROTOCOL = NO;
+  const protocol_usage PROTOCOL = NO; // Change to YES to avoid deadlock
 
   // set data for all threads
 
-  // Thread τ₁: C=0.15s, C_R1=0.05s (33%), T=1.4s
-  // Distribution: before=0.03s (20%), mutex=0.05s (33%), after=0.07s (47%)
+  // Thread τ₁: C=0.15s, C_R1=0.025s, C_R2=0.025s (total 0.05s in mutexes = 33%), T=1.4s
+  // Distribution: before=0.03s (20%), R1=0.025s, R2=0.025s, between=0.01s, after=0.06s
+  // Order: R1 -> R2 (mutex_order=1)
   data1.period.tv_sec = 1;
   data1.period.tv_nsec = 400000000;
   data1.wcet1.tv_sec = 0;
-  data1.wcet1.tv_nsec = 30000000; // 0.03s before mutex (20% of C)
+  data1.wcet1.tv_nsec = 30000000;  // 0.03s before mutexes (20% of C)
   data1.wcet2.tv_sec = 0;
-  data1.wcet2.tv_nsec = 70000000; // 0.07s after mutex (47% of C)
-  data1.wcetmut.tv_sec = 0;
-  data1.wcetmut.tv_nsec = 50000000; // 0.05s in mutex (33% of C)
+  data1.wcet2.tv_nsec = 10000000;  // 0.01s between mutexes
+  data1.wcet3.tv_sec = 0;
+  data1.wcet3.tv_nsec = 60000000;  // 0.06s after mutexes
+  data1.wcetmut1.tv_sec = 0;
+  data1.wcetmut1.tv_nsec = 25000000; // 0.025s in R1
+  data1.wcetmut2.tv_sec = 0;
+  data1.wcetmut2.tv_nsec = 25000000; // 0.025s in R2
   data1.phase.tv_sec = 0;
-  data1.phase.tv_nsec = 100000000; // 0.1s phase to start after τ₄
-  data1.mutex = &mutex;
+  data1.phase.tv_nsec = 0; // Start immediately to create deadlock condition
+  data1.mutex1 = &mutex1; // R1
+  data1.mutex2 = &mutex2; // R2
+  data1.mutex_order = 1;  // Order: R1 -> R2
   data1.id = 1;
 
   // Thread τ₂: C=0.6s, no mutex, T=2.9s
-  // Distribution: all execution time split evenly
+  // Distribution: split in three parts
   data2.period.tv_sec = 2;
   data2.period.tv_nsec = 900000000;
   data2.wcet1.tv_sec = 0;
-  data2.wcet1.tv_nsec = 300000000; // 0.3s before
+  data2.wcet1.tv_nsec = 200000000; // 0.2s
   data2.wcet2.tv_sec = 0;
-  data2.wcet2.tv_nsec = 300000000; // 0.3s after
-  data2.wcetmut.tv_sec = 0;
-  data2.wcetmut.tv_nsec = 0;
+  data2.wcet2.tv_nsec = 200000000; // 0.2s
+  data2.wcet3.tv_sec = 0;
+  data2.wcet3.tv_nsec = 200000000; // 0.2s
+  data2.wcetmut1.tv_sec = 0;
+  data2.wcetmut1.tv_nsec = 0;
+  data2.wcetmut2.tv_sec = 0;
+  data2.wcetmut2.tv_nsec = 0;
   data2.phase.tv_sec = 0;
   data2.phase.tv_nsec = 50000000; // 0.05s phase
-  data2.mutex = NULL;
+  data2.mutex1 = NULL;
+  data2.mutex2 = NULL;
+  data2.mutex_order = 0;
   data2.id = 2;
 
   // Thread τ₃: C=2.7s, no mutex, T=13.0s
-  // Distribution: all execution time split evenly
+  // Distribution: split in three parts
   data3.period.tv_sec = 13;
   data3.period.tv_nsec = 0;
-  data3.wcet1.tv_sec = 1;
-  data3.wcet1.tv_nsec = 350000000; // 1.35s before
-  data3.wcet2.tv_sec = 1;
-  data3.wcet2.tv_nsec = 350000000; // 1.35s after
-  data3.wcetmut.tv_sec = 0;
-  data3.wcetmut.tv_nsec = 0;
+  data3.wcet1.tv_sec = 0;
+  data3.wcet1.tv_nsec = 900000000; // 0.9s
+  data3.wcet2.tv_sec = 0;
+  data3.wcet2.tv_nsec = 900000000; // 0.9s
+  data3.wcet3.tv_sec = 0;
+  data3.wcet3.tv_nsec = 900000000; // 0.9s
+  data3.wcetmut1.tv_sec = 0;
+  data3.wcetmut1.tv_nsec = 0;
+  data3.wcetmut2.tv_sec = 0;
+  data3.wcetmut2.tv_nsec = 0;
   data3.phase.tv_sec = 0;
   data3.phase.tv_nsec = 60000000; // 0.06s phase
-  data3.mutex = NULL;
+  data3.mutex1 = NULL;
+  data3.mutex2 = NULL;
+  data3.mutex_order = 0;
   data3.id = 3;
 
-  // Thread τ₄: C=5.3s, C_R1=1.0s (19%), T=50.0s
-  // Distribution: before=1.06s (20%), mutex=1.0s (19%), after=3.24s (61%)
+  // Thread τ₄: C=5.3s, C_R1=0.5s, C_R2=0.5s (total 1.0s in mutexes = 19%), T=50.0s
+  // Distribution: before=1.06s (20%), R2=0.5s, R1=0.5s, between=0.24s, after=3.0s
+  // Order: R2 -> R1 (mutex_order=2) - OPPOSITE to τ₁ to create DEADLOCK!
   data4.period.tv_sec = 50;
   data4.period.tv_nsec = 0;
   data4.wcet1.tv_sec = 1;
-  data4.wcet1.tv_nsec = 60000000; // 1.06s before mutex (20% of C)
-  data4.wcet2.tv_sec = 3;
-  data4.wcet2.tv_nsec = 240000000; // 3.24s after mutex (61% of C)
-  data4.wcetmut.tv_sec = 1;
-  data4.wcetmut.tv_nsec = 0; // 1.0s in mutex (19% of C)
+  data4.wcet1.tv_nsec = 60000000;  // 1.06s before mutexes (20% of C)
+  data4.wcet2.tv_sec = 0;
+  data4.wcet2.tv_nsec = 240000000; // 0.24s between mutexes
+  data4.wcet3.tv_sec = 3;
+  data4.wcet3.tv_nsec = 0;         // 3.0s after mutexes
+  data4.wcetmut1.tv_sec = 0;
+  data4.wcetmut1.tv_nsec = 500000000; // 0.5s in R1
+  data4.wcetmut2.tv_sec = 0;
+  data4.wcetmut2.tv_nsec = 500000000; // 0.5s in R2
   data4.phase.tv_sec = 0;
-  data4.phase.tv_nsec = 0; // starts immediately
-  data4.mutex = &mutex;
+  data4.phase.tv_nsec = 10000000;  // Start at 0.01s, slightly after τ₁ to create deadlock
+  data4.mutex1 = &mutex1; // R1
+  data4.mutex2 = &mutex2; // R2
+  data4.mutex_order = 2;  // Order: R2 -> R1 (OPPOSITE to thread 1!)
   data4.id = 4;
 
   // Set the priority of the main program to max_prio-1
@@ -185,20 +264,32 @@ int main()
     exit(1);
   }
 
-  // Create the mutex attributes object
-  pthread_mutexattr_init(&mutexattr);
+  // Create the mutex attributes objects for R1 and R2
+  pthread_mutexattr_init(&mutexattr1);
+  pthread_mutexattr_init(&mutexattr2);
 
-  // Set the mutex protocol and ceiling
+  // Set the mutex protocol and ceiling for both mutexes
   if (PROTOCOL == YES)
   {
-    pthread_mutexattr_setprotocol(&mutexattr, PTHREAD_PRIO_PROTECT);
-    pthread_mutexattr_setprioceiling(&mutexattr, sched_get_priority_min(SCHED_FIFO) + 5);
+    // With priority ceiling protocol, deadlock is avoided
+    pthread_mutexattr_setprotocol(&mutexattr1, PTHREAD_PRIO_PROTECT);
+    pthread_mutexattr_setprioceiling(&mutexattr1, sched_get_priority_min(SCHED_FIFO) + 5);
+    
+    pthread_mutexattr_setprotocol(&mutexattr2, PTHREAD_PRIO_PROTECT);
+    pthread_mutexattr_setprioceiling(&mutexattr2, sched_get_priority_min(SCHED_FIFO) + 5);
   }
 
-  // Create the mutex
-  if (pthread_mutex_init(&mutex, &mutexattr) != 0)
+  // Create mutex R1
+  if (pthread_mutex_init(&mutex1, &mutexattr1) != 0)
   {
-    printf("mutex_init\n");
+    printf("mutex1_init (R1)\n");
+    exit(1);
+  }
+
+  // Create mutex R2
+  if (pthread_mutex_init(&mutex2, &mutexattr2) != 0)
+  {
+    printf("mutex2_init (R2)\n");
     exit(1);
   }
 

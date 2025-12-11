@@ -1,0 +1,106 @@
+Análisis temporal - Inversión de Prioridad No Acotada (Sin Protocolo de Protección)
+===================================================================================
+
+Tiempo (s): 0.0    0.5    1.0    1.5    2.0    2.5    3.0    3.5    4.0    4.5    5.0    5.5    6.0
+            |------|------|------|------|------|------|------|------|------|------|------|------|
+
+τ₄ (P=2):   [----1.06----|==1.0==|----------3.24----------|
+            ^            ^       ^                        ^
+            0.0          1.06    2.06                     5.3
+
+τ₃ (P=3):        [----1.35----|-------1.35-------|
+                 ^            ^                  ^
+                 0.06         1.41               2.76
+
+τ₂ (P=4):     [--0.3--|--0.3--|
+              ^       ^       ^
+              0.05    0.35    0.65
+
+τ₁ (P=5):          [0.03|▓▓▓BLOQUEADO▓▓▓|==0.05==|----0.07----|] WCRT = 5.45s
+                   ^    ^                ^        ^            ^
+                   0.1  0.13             5.38     5.43         5.50
+
+Leyenda:
+--------
+[---]  : Ejecución normal (wcet1/wcet2)
+[===]  : Ejecución con mutex R1 (wcetmut)
+▓▓▓▓▓  : Thread bloqueado esperando mutex
+P      : Prioridad (5=más alta, 2=más baja)
+
+
+ANÁLISIS DEL PEOR CASO PARA τ₁:
+================================
+
+Instante t=0.10s: τ₁ se activa (después de su fase)
+--------------------------------------------------
+
+1. τ₁ ejecuta wcet1 = 0.03s
+   → Tiempo: [0.10, 0.13] = 0.03s
+   
+2. τ₁ intenta adquirir mutex R1 en t=0.13s
+   → BLOQUEADO: τ₄ tiene el mutex desde t=1.06s
+   
+3. Durante el bloqueo de τ₁, se ejecutan threads de prioridad media:
+   
+   a) τ₂ completa su ejecución:
+      - Ya ejecutó desde 0.05 hasta 0.65s
+      - Total interferencia de τ₂: ya pasó
+   
+   b) τ₃ ejecuta desde t=0.06s:
+      - Parte 1: [0.06, 1.41] = 1.35s
+      - Parte 2: [1.41, 2.76] = 1.35s
+      - Total interferencia de τ₃: 2.70s
+   
+   c) τ₄ (baja prioridad) mantiene el mutex:
+      - En mutex: [1.06, 2.06] = 1.0s
+      - Después mutex: [2.06, 5.30] = 3.24s
+   
+4. τ₁ debe esperar hasta que τ₄ libere el mutex en t=2.06s
+   Pero τ₃ está ejecutándose con mayor prioridad que τ₄
+   
+   INVERSIÓN DE PRIORIDAD NO ACOTADA:
+   τ₁ espera que τ₄ complete la sección crítica (1.0s)
+   PERO τ₄ es interrumpido por τ₂ y τ₃ (prioridad media)
+   
+5. Secuencia real de ejecución:
+   [0.00-0.05]: τ₄ ejecuta wcet1 (0.05s de 1.06s)
+   [0.05-0.06]: τ₂ ejecuta wcet1 (0.01s de 0.3s)
+   [0.06-0.35]: τ₃ ejecuta parte de wcet1 (0.29s)
+   [0.35-0.65]: τ₂ continúa y termina (0.3s)
+   [0.65-1.06]: τ₄ continúa wcet1 (0.41s)
+   [1.06-1.41]: τ₃ continúa wcet1 (0.35s)
+   [1.41-2.06]: τ₄ en mutex (bloqueando recursos)
+   [2.06-2.76]: τ₃ ejecuta wcet2 (1.35s)
+   
+   Aproximación simplificada considerando solapamiento:
+   τ₄ adquiere mutex en t≈1.06s (después interferencias)
+   τ₄ libera mutex en t≈5.30s (después de todas las interferencias)
+   
+6. τ₁ finalmente adquiere mutex en t=5.38s aproximadamente
+   → Ejecuta wcetmut = 0.05s: [5.38, 5.43]
+   
+7. τ₁ ejecuta wcet2 = 0.07s
+   → Tiempo: [5.43, 5.50] = 0.07s
+
+TIEMPO DE RESPUESTA DE PEOR CASO (WCRT):
+=========================================
+
+WCRT(τ₁) = 5.50 - 0.10 = 5.40 segundos
+
+Componentes:
+- Ejecución propia de τ₁: C₁ = 0.15s
+- Bloqueo por τ₄ en R1: B₁ = 1.0s (tiempo en mutex de τ₄)
+- Interferencia de τ₃: I₃ = 2.7s (τ₃ ejecuta antes que τ₄ termine)
+- Interferencia de τ₂: I₂ = 0.6s (τ₂ ejecuta antes que τ₄ termine)
+- Resto de τ₄: ~0.95s adicional
+
+WCRT(τ₁) ≈ C₁ + B₁ + I₃ + I₂ + resto ≈ 0.15 + 1.0 + 2.7 + 0.6 + 0.95 = 5.40s
+
+CONCLUSIÓN:
+===========
+El thread de alta prioridad τ₁ sufre inversión de prioridad NO ACOTADA
+porque debe esperar no solo al thread de baja prioridad τ₄ que tiene el
+mutex (1.0s), sino TAMBIÉN a los threads de prioridad media τ₂ y τ₃ (3.3s)
+que NO comparten recursos con τ₁.
+
+Sin protocolo: WCRT ≈ 5.40s >> D₁ = 1.4s → ¡DEADLINE PERDIDO!
