@@ -5,15 +5,18 @@
 **Dos recursos compartidos (R1 y R2)** entre threads τ₁ (alta prioridad) y τ₄ (baja prioridad)
 
 **Distribución de tiempo:**
+
 - τ₁: 0.15s total → 0.025s en R1 + 0.025s en R2 (repartido equitativamente)
 - τ₄: 5.3s total → 0.5s en R1 + 0.5s en R2 (repartido equitativamente)
 - Ambos tienen ≥20% de tiempo antes y después de los mutexes
 
 **Orden de adquisición:**
+
 - τ₁: R1 → R2 (mutex_order = 1)
 - τ₄: R2 → R1 (mutex_order = 2) **← ORDEN INVERSO**
 
 **Fases configuradas para deadlock:**
+
 - τ₁: fase = 0s (inicia primero)
 - τ₄: fase = 0.01s (inicia 10ms después)
 
@@ -28,9 +31,9 @@ Tiempo →
   |          |          |          |          |
 τ₁├─wcet1──►├─[R1]────►├─WAIT R2──────────────────► ⏸️ BLOQUEADO
   |          |    ▲     |                           (espera R2)
-  |          |    │     |                           
+  |          |    │     |
   |          |    │     └──► τ₁ intenta R2 pero τ₄ lo tiene
-  |          |    │                                  
+  |          |    │
   |          |    └──────── τ₁ tiene R1
   |          |
   |          |
@@ -41,7 +44,7 @@ Tiempo →
                         |          |    │
                         |          |    └──────── τ₄ tiene R2
                         |          |
-                        
+
 🔴 DEADLOCK: Dependencia circular detectada
    τ₁ → wait(R2) ← hold(τ₄)
    τ₄ → wait(R1) ← hold(τ₁)
@@ -73,12 +76,14 @@ Ejecución ordenada:
 ### Cómo Probar
 
 #### 1. Compilar
+
 ```bash
 cd /home/ian-saucedo/Desktop/periodic_sr
 gcc -o periodic_sr periodic_sr.c eat.c -lpthread -lrt
 ```
 
 #### 2. Test de Deadlock (PROTOCOL=NO)
+
 ```bash
 # Asegurar que en periodic_sr.c línea ~168:
 #   const protocol_usage PROTOCOL = NO;
@@ -94,6 +99,7 @@ sudo ./periodic_sr
 ```
 
 #### 3. Test sin Deadlock (PROTOCOL=YES)
+
 ```bash
 # Cambiar en periodic_sr.c línea ~168:
 #   const protocol_usage PROTOCOL = YES;
@@ -113,21 +119,24 @@ sudo ./periodic_sr
 ### Resultados Esperados
 
 #### Sin Protocolo (PROTOCOL=NO):
+
 ```
 0.030 - Start thread - 1
 0.030 - Thread trying to lock R1 - 1
 0.030 - Thread acquired R1 - 1
 0.055 - Thread trying to lock R2 - 1
 1.070 - Start thread - 4
-1.070 - Thread trying to lock R2 - 4  
+1.070 - Thread trying to lock R2 - 4
 1.070 - Thread acquired R2 - 4
 1.570 - Thread trying to lock R1 - 4
 [... silencio, sistema bloqueado ...]
 ^C
 ```
+
 **Interpretación**: Deadlock confirmado. Los threads están en espera mutua.
 
 #### Con Protocolo (PROTOCOL=YES):
+
 ```
 0.030 - Start thread - 1
 0.030 - Thread trying to lock R1 - 1
@@ -141,6 +150,7 @@ sudo ./periodic_sr
 [... continúa ejecutándose ...]
 ^C
 ```
+
 **Interpretación**: Sistema funcional. Los threads progresan sin deadlock.
 
 ---
@@ -148,6 +158,7 @@ sudo ./periodic_sr
 ### Verificación del Deadlock
 
 **Síntomas de deadlock:**
+
 1. ✓ Salida se detiene después de "Thread trying to lock..."
 2. ✓ CPU usage baja (~0%, threads bloqueados)
 3. ✓ Dos threads en estado BLOCKED esperando mutexes
@@ -155,6 +166,7 @@ sudo ./periodic_sr
 5. ✓ Sistema requiere kill forzado (Ctrl+C)
 
 **Con protocolo funcionando:**
+
 1. ✓ Mensajes "acquired" seguidos de "released"
 2. ✓ Mensajes "End thread" aparecen periódicamente
 3. ✓ CPU usage mayor (threads ejecutándose)
@@ -165,13 +177,13 @@ sudo ./periodic_sr
 
 ### Archivos Relevantes
 
-| Archivo | Descripción |
-|---------|-------------|
-| `periodic_sr.c` | ⭐ Código principal - MODIFICA AQUÍ `PROTOCOL` |
-| `README.md` | Guía rápida de uso |
-| `DEADLOCK_ANALYSIS.md` | Análisis teórico completo |
-| `test_deadlock.sh` | Script de prueba automatizado |
-| `QUICKSTART.md` | Este archivo - guía rápida |
+| Archivo                | Descripción                                    |
+| ---------------------- | ---------------------------------------------- |
+| `periodic_sr.c`        | ⭐ Código principal - MODIFICA AQUÍ `PROTOCOL` |
+| `README.md`            | Guía rápida de uso                             |
+| `DEADLOCK_ANALYSIS.md` | Análisis teórico completo                      |
+| `test_deadlock.sh`     | Script de prueba automatizado                  |
+| `QUICKSTART.md`        | Este archivo - guía rápida                     |
 
 ---
 

@@ -88,12 +88,12 @@ void *periodic(void *arg)
         pthread_mutex_lock(my_data->mutex1);
         report("Thread acquired R1", my_data->id, NULL);
         eat(&(my_data->wcetmut1));
-        
+
         report("Thread trying to lock R2", my_data->id, NULL);
         pthread_mutex_lock(my_data->mutex2);
         report("Thread acquired R2", my_data->id, NULL);
         eat(&(my_data->wcetmut2));
-        
+
         pthread_mutex_unlock(my_data->mutex2);
         report("Thread released R2", my_data->id, NULL);
         pthread_mutex_unlock(my_data->mutex1);
@@ -106,12 +106,12 @@ void *periodic(void *arg)
         pthread_mutex_lock(my_data->mutex2);
         report("Thread acquired R2", my_data->id, NULL);
         eat(&(my_data->wcetmut2));
-        
+
         report("Thread trying to lock R1", my_data->id, NULL);
         pthread_mutex_lock(my_data->mutex1);
         report("Thread acquired R1", my_data->id, NULL);
         eat(&(my_data->wcetmut1));
-        
+
         pthread_mutex_unlock(my_data->mutex1);
         report("Thread released R1", my_data->id, NULL);
         pthread_mutex_unlock(my_data->mutex2);
@@ -131,7 +131,7 @@ void *periodic(void *arg)
     {
       eat(&(my_data->wcet2)); // no mutexes
     }
-    
+
     eat(&(my_data->wcet3)); // work after mutexes
     clock_gettime(CLOCK_MONOTONIC, &response_time);
     decr_timespec(&response_time, &next_time);
@@ -174,21 +174,32 @@ int main()
   // Order: R1 -> R2 (mutex_order=1)
   data1.period.tv_sec = 1;
   data1.period.tv_nsec = 400000000;
-  data1.wcet1.tv_sec = 0;
-  data1.wcet1.tv_nsec = 30000000;  // 0.03s before mutexes (20% of C)
+  A continuación se ejecutará de nuevo el programa haciendo uso
+      del mutex que usa el protocolo de protección de prioridad
+          Observar cómo la inversión de prioridad no acotada desaparece,
+      y
+          el thread de alta prioridad tiene un tiempo de respuesta mucho
+              menor
+                  Anotar y comentar los resultados obtenidos,
+      y en particular :
+• lo que le sucede al thread de mayor prioridad cuando se utiliza
+          el mutex sin protocolo de protección de prioridad
+• lo que les sucede a los threads de prioridad intermedia al usar el
+              protocolo de protección de prioridad data1.wcet1.tv_sec = 0;
+  data1.wcet1.tv_nsec = 30000000; // 0.03s before mutexes (20% of C)
   data1.wcet2.tv_sec = 0;
-  data1.wcet2.tv_nsec = 10000000;  // 0.01s between mutexes
+  data1.wcet2.tv_nsec = 10000000; // 0.01s between mutexes
   data1.wcet3.tv_sec = 0;
-  data1.wcet3.tv_nsec = 60000000;  // 0.06s after mutexes
+  data1.wcet3.tv_nsec = 60000000; // 0.06s after mutexes
   data1.wcetmut1.tv_sec = 0;
   data1.wcetmut1.tv_nsec = 25000000; // 0.025s in R1
   data1.wcetmut2.tv_sec = 0;
   data1.wcetmut2.tv_nsec = 25000000; // 0.025s in R2
   data1.phase.tv_sec = 0;
   data1.phase.tv_nsec = 0; // Start immediately to create deadlock condition
-  data1.mutex1 = &mutex1; // R1
-  data1.mutex2 = &mutex2; // R2
-  data1.mutex_order = 1;  // Order: R1 -> R2
+  data1.mutex1 = &mutex1;  // R1
+  data1.mutex2 = &mutex2;  // R2
+  data1.mutex_order = 1;   // Order: R1 -> R2
   data1.id = 1;
 
   // Thread τ₂: C=0.6s, no mutex, T=2.9s
@@ -239,20 +250,20 @@ int main()
   data4.period.tv_sec = 50;
   data4.period.tv_nsec = 0;
   data4.wcet1.tv_sec = 1;
-  data4.wcet1.tv_nsec = 60000000;  // 1.06s before mutexes (20% of C)
+  data4.wcet1.tv_nsec = 60000000; // 1.06s before mutexes (20% of C)
   data4.wcet2.tv_sec = 0;
   data4.wcet2.tv_nsec = 240000000; // 0.24s between mutexes
   data4.wcet3.tv_sec = 3;
-  data4.wcet3.tv_nsec = 0;         // 3.0s after mutexes
+  data4.wcet3.tv_nsec = 0; // 3.0s after mutexes
   data4.wcetmut1.tv_sec = 0;
   data4.wcetmut1.tv_nsec = 500000000; // 0.5s in R1
   data4.wcetmut2.tv_sec = 0;
   data4.wcetmut2.tv_nsec = 500000000; // 0.5s in R2
   data4.phase.tv_sec = 0;
-  data4.phase.tv_nsec = 10000000;  // Start at 0.01s, slightly after τ₁ to create deadlock
-  data4.mutex1 = &mutex1; // R1
-  data4.mutex2 = &mutex2; // R2
-  data4.mutex_order = 2;  // Order: R2 -> R1 (OPPOSITE to thread 1!)
+  data4.phase.tv_nsec = 10000000; // Start at 0.01s, slightly after τ₁ to create deadlock
+  data4.mutex1 = &mutex1;         // R1
+  data4.mutex2 = &mutex2;         // R2
+  data4.mutex_order = 2;          // Order: R2 -> R1 (OPPOSITE to thread 1!)
   data4.id = 4;
 
   // Set the priority of the main program to max_prio-1
@@ -274,7 +285,7 @@ int main()
     // With priority ceiling protocol, deadlock is avoided
     pthread_mutexattr_setprotocol(&mutexattr1, PTHREAD_PRIO_PROTECT);
     pthread_mutexattr_setprioceiling(&mutexattr1, sched_get_priority_min(SCHED_FIFO) + 5);
-    
+
     pthread_mutexattr_setprotocol(&mutexattr2, PTHREAD_PRIO_PROTECT);
     pthread_mutexattr_setprioceiling(&mutexattr2, sched_get_priority_min(SCHED_FIFO) + 5);
   }
