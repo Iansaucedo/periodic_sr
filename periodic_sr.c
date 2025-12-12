@@ -53,101 +53,84 @@ void report(char *message, int id, struct timespec *response_time)
 // Periodic thread using nanosleep
 void *periodic(void *arg)
 {
-  struct periodic_data *my_data = (struct periodic_data *)arg;
-  struct timespec next_time;
+  struct periodic_data *d = (struct periodic_data *)arg;
+  struct timespec next_time = initial_time;
   struct timespec response_time;
   int err;
 
-  my_data->wcrt.tv_sec = 0;
-  my_data->wcrt.tv_nsec = 0;
+  d->wcrt.tv_sec = d->wcrt.tv_nsec = 0;
 
-  // set initial time and wait for the critical instant
-  next_time = initial_time;
-  incr_timespec(&next_time, &(my_data->phase));
-  if ((err = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME,
-                             &next_time, NULL)) != 0)
+  incr_timespec(&next_time, &d->phase);
+  if ((err = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_time, NULL)) != 0)
   {
     printf("Error in clock_nanosleep: %s\n", strerror(err));
     pthread_exit(NULL);
   }
 
-  // infinite loop where periodic work is done
   while (1)
   {
-    // periodic work
-    report("Start thread ", my_data->id, NULL);
-    eat(&(my_data->wcet1)); // work before acquiring mutexes
+    report("Start thread ", d->id, NULL);
+    eat(&d->wcet1);
 
-    // Use mutexes in different order depending on mutex_order
-    if (my_data->mutex1 != NULL && my_data->mutex2 != NULL)
+    if (d->mutex1 && d->mutex2)
     {
-      if (my_data->mutex_order == 1)
+      if (d->mutex_order == 1)
       {
-        // Order: R1 -> R2
-        report("Thread trying to lock R1", my_data->id, NULL);
-        pthread_mutex_lock(my_data->mutex1);
-        report("Thread acquired R1", my_data->id, NULL);
-        eat(&(my_data->wcetmut1));
+        report("Thread trying to lock R1", d->id, NULL);
+        pthread_mutex_lock(d->mutex1);
+        report("Thread acquired R1", d->id, NULL);
+        eat(&d->wcetmut1);
 
-        report("Thread trying to lock R2", my_data->id, NULL);
-        pthread_mutex_lock(my_data->mutex2);
-        report("Thread acquired R2", my_data->id, NULL);
-        eat(&(my_data->wcetmut2));
+        report("Thread trying to lock R2", d->id, NULL);
+        pthread_mutex_lock(d->mutex2);
+        report("Thread acquired R2", d->id, NULL);
+        eat(&d->wcetmut2);
 
-        pthread_mutex_unlock(my_data->mutex2);
-        report("Thread released R2", my_data->id, NULL);
-        pthread_mutex_unlock(my_data->mutex1);
-        report("Thread released R1", my_data->id, NULL);
+        pthread_mutex_unlock(d->mutex2);
+        report("Thread released R2", d->id, NULL);
+        pthread_mutex_unlock(d->mutex1);
+        report("Thread released R1", d->id, NULL);
       }
       else
       {
-        // Order: R2 -> R1
-        report("Thread trying to lock R2", my_data->id, NULL);
-        pthread_mutex_lock(my_data->mutex2);
-        report("Thread acquired R2", my_data->id, NULL);
-        eat(&(my_data->wcetmut2));
+        report("Thread trying to lock R2", d->id, NULL);
+        pthread_mutex_lock(d->mutex2);
+        report("Thread acquired R2", d->id, NULL);
+        eat(&d->wcetmut2);
 
-        report("Thread trying to lock R1", my_data->id, NULL);
-        pthread_mutex_lock(my_data->mutex1);
-        report("Thread acquired R1", my_data->id, NULL);
-        eat(&(my_data->wcetmut1));
+        report("Thread trying to lock R1", d->id, NULL);
+        pthread_mutex_lock(d->mutex1);
+        report("Thread acquired R1", d->id, NULL);
+        eat(&d->wcetmut1);
 
-        pthread_mutex_unlock(my_data->mutex1);
-        report("Thread released R1", my_data->id, NULL);
-        pthread_mutex_unlock(my_data->mutex2);
-        report("Thread released R2", my_data->id, NULL);
+        pthread_mutex_unlock(d->mutex1);
+        report("Thread released R1", d->id, NULL);
+        pthread_mutex_unlock(d->mutex2);
+        report("Thread released R2", d->id, NULL);
       }
-      eat(&(my_data->wcet2)); // work between mutexes release and end
     }
-    else if (my_data->mutex1 != NULL)
+    else if (d->mutex1)
     {
-      // Only use mutex1 (for compatibility with threads 2 and 3)
-      pthread_mutex_lock(my_data->mutex1);
-      eat(&(my_data->wcetmut1));
-      pthread_mutex_unlock(my_data->mutex1);
-      eat(&(my_data->wcet2));
-    }
-    else
-    {
-      eat(&(my_data->wcet2)); // no mutexes
+      pthread_mutex_lock(d->mutex1);
+      eat(&d->wcetmut1);
+      pthread_mutex_unlock(d->mutex1);
     }
 
-    eat(&(my_data->wcet3)); // work after mutexes
+    eat(&d->wcet2);
+    eat(&d->wcet3);
+
     clock_gettime(CLOCK_MONOTONIC, &response_time);
     decr_timespec(&response_time, &next_time);
-    report("End   thread ", my_data->id, &response_time);
+    report("End   thread ", d->id, &response_time);
 
-    // set wcrt
-    if smaller_timespec (&(my_data->wcrt), &response_time)
+    if smaller_timespec (&d->wcrt, &response_time)
     {
-      my_data->wcrt = response_time;
-      report("Worst-case response time ", my_data->id, &(my_data->wcrt));
+      d->wcrt = response_time;
+      report("Worst-case response time ", d->id, &d->wcrt);
     }
 
-    // wait for next period
-    incr_timespec(&next_time, &(my_data->period));
-    if ((err = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME,
-                               &next_time, NULL)) != 0)
+    incr_timespec(&next_time, &d->period);
+    if ((err = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_time, NULL)) != 0)
     {
       printf("Error in clock_nanosleep: %s\n", strerror(err));
       pthread_exit(NULL);
@@ -165,7 +148,7 @@ int main()
   pthread_mutexattr_t mutexattr1, mutexattr2;
   struct periodic_data data1, data2, data3, data4;
 
-  const protocol_usage PROTOCOL = NO; // Change to YES to avoid deadlock
+  const protocol_usage PROTOCOL = YES; // Change to YES to avoid deadlock
 
   // set data for all threads
 
@@ -174,18 +157,7 @@ int main()
   // Order: R1 -> R2 (mutex_order=1)
   data1.period.tv_sec = 1;
   data1.period.tv_nsec = 400000000;
-  A continuación se ejecutará de nuevo el programa haciendo uso
-      del mutex que usa el protocolo de protección de prioridad
-          Observar cómo la inversión de prioridad no acotada desaparece,
-      y
-          el thread de alta prioridad tiene un tiempo de respuesta mucho
-              menor
-                  Anotar y comentar los resultados obtenidos,
-      y en particular :
-• lo que le sucede al thread de mayor prioridad cuando se utiliza
-          el mutex sin protocolo de protección de prioridad
-• lo que les sucede a los threads de prioridad intermedia al usar el
-              protocolo de protección de prioridad data1.wcet1.tv_sec = 0;
+  data1.wcet1.tv_sec = 0;
   data1.wcet1.tv_nsec = 30000000; // 0.03s before mutexes (20% of C)
   data1.wcet2.tv_sec = 0;
   data1.wcet2.tv_nsec = 10000000; // 0.01s between mutexes
@@ -336,6 +308,9 @@ int main()
     exit(1);
   }
 
+  // Capture initial time before creating the threads so timestamps start near 0
+  clock_gettime(CLOCK_MONOTONIC, &initial_time);
+
   // Set the priority of thread 1 to min_prio+5
   sch_param.sched_priority =
       (sched_get_priority_min(SCHED_FIFO) + 5);
@@ -399,10 +374,6 @@ int main()
   {
     printf("Error en creacion de thread 4\n");
   }
-
-  // Read the initial time for use by the report function
-  // and also as the time reference to synchronize all threads
-  clock_gettime(CLOCK_MONOTONIC, &initial_time);
 
   sleep(1000);
 }
